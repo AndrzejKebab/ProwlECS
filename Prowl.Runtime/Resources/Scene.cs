@@ -366,9 +366,9 @@ public class Scene : EngineObject, ISerializationCallbackReceiver
     [SerializeIgnore, NotHeld]
     internal readonly List<GameCanvas> Canvases = [];
 
-    /// <summary>The enabled volumetric clouds in this scene. The first one is drawn.</summary>
+    /// <summary>The cameras in this scene, enabled or not, so finding them each frame doesn't walk every object.</summary>
     [SerializeIgnore, NotHeld]
-    internal readonly List<VolumetricClouds> Clouds = [];
+    internal readonly List<Camera> Cameras = [];
 
     [SerializeIgnore, NotHeld]
     private SceneRendering? _rendering;
@@ -392,7 +392,7 @@ public class Scene : EngineObject, ISerializationCallbackReceiver
         // component whose new type gained its first per-frame callback start dispatching at all.
         _dispatcher.Reset();
         Canvases.Clear();
-        Clouds.Clear();
+        Cameras.Clear();
 
         foreach (GameObject go in _allObj)
         {
@@ -400,11 +400,12 @@ public class Scene : EngineObject, ISerializationCallbackReceiver
 
             foreach (Component comp in go._components)
             {
-                if (ReferenceEquals(comp, null) || comp.IsDisposed || !comp.EnabledInHierarchy) continue;
+                if (ReferenceEquals(comp, null) || comp.IsDisposed) continue;
+                if (comp is Camera camera) camera.JoinScene(this);
+                if (!comp.EnabledInHierarchy) continue;
                 comp._countedCollisionListener = false;
                 _dispatcher.Register(comp);
                 if (comp is GameCanvas canvas) canvas.RegisterIn(this);
-                if (comp is VolumetricClouds clouds) clouds.JoinScene(this);
             }
         }
     }
@@ -945,6 +946,7 @@ public class Scene : EngineObject, ISerializationCallbackReceiver
         // Clear any remaining references
         _allObj.Clear();
         _allObjSet.Clear();
+        Cameras.Clear();
 
         _rendering?.Dispose();
         _rendering = null;
@@ -1086,19 +1088,11 @@ public class Scene : EngineObject, ISerializationCallbackReceiver
     {
         var cameras = new List<Camera>();
 
-        for (int i = 0; i < _allObj.Count; i++)
+        foreach (Camera camera in Cameras)
         {
-            GameObject go = _allObj[i];
-            if (go.IsDisposed || !go.EnabledInHierarchy) continue;
-            if ((go.HideFlags & HideFlags.HideAndDontSave) != 0) continue; // not HasFlag: it boxes in unoptimized builds
-
-            foreach (Component component in go._components)
-            {
-                if (component is Camera camera && camera.EnabledInHierarchy)
-                {
-                    cameras.Add(camera);
-                }
-            }
+            if (!camera.EnabledInHierarchy) continue;
+            if ((camera.GameObject.HideFlags & HideFlags.HideAndDontSave) != 0) continue; // not HasFlag: it boxes in unoptimized builds
+            cameras.Add(camera);
         }
 
         cameras.Sort(static (a, b) => a.Depth.CompareTo(b.Depth));
@@ -1109,18 +1103,13 @@ public class Scene : EngineObject, ISerializationCallbackReceiver
     internal Camera? FindMainCamera()
     {
         Camera? main = null;
-        for (int i = 0; i < _allObj.Count; i++)
+        foreach (Camera camera in Cameras)
         {
-            GameObject go = _allObj[i];
-            if (go.IsDisposed || !go.EnabledInHierarchy) continue;
-            if ((go.HideFlags & HideFlags.HideAndDontSave) != 0) continue;
+            if (!camera.EnabledInHierarchy) continue;
+            if ((camera.GameObject.HideFlags & HideFlags.HideAndDontSave) != 0) continue;
 
-            foreach (Component component in go._components)
-            {
-                if (component is Camera camera && camera.EnabledInHierarchy && camera.Target.IsNotValid() && camera.Background != CameraBackground.None
-                    && (main.IsNotValid() || camera.Depth > main.Depth))
-                    main = camera;
-            }
+            if (camera.Target.IsNotValid() && camera.Background != CameraBackground.None && (main.IsNotValid() || camera.Depth > main.Depth))
+                main = camera;
         }
         return main;
     }

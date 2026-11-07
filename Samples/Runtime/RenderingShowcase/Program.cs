@@ -51,15 +51,15 @@ public sealed class RenderingShowcaseGame : StationGame
 {
     private const float StationSpacing = 30f;
     private const int SurfaceStation = 1, DecalStation = 2, LightStation = 4, AreaLightStation = 5, ManyLightStation = 6;
-    private const int FogStation = 7, InstancingStation = 8, CloudStation = 10, StationCount = 11;
+    private const int FogStation = 7, InstancingStation = 8, CloudStation = 10, OceanStation = 11, StationCount = 12;
 
     // The time of day each station is shown at, in hours.
-    private static readonly float[] StationHours = [14f, 15f, 13f, 13f, 22f, 22f, 22f, 23f, 11f, 14f, 16f];
+    private static readonly float[] StationHours = [14f, 15f, 13f, 13f, 22f, 22f, 22f, 23f, 11f, 14f, 16f, 17.5f];
 
     private DirectionalLight _sun = null!;
-    private VolumetricFog _fog = null!;
     private VolumetricClouds _clouds = null!;
     private float _cloudFlightSpeed = 300f;
+    private Ocean _ocean = null!;
     private Bloom _bloom = null!;
     private Tonemapping _tonemapping = null!;
 
@@ -82,17 +82,15 @@ public sealed class RenderingShowcaseGame : StationGame
         _sun = sun.AddComponent<DirectionalLight>();
         Add(sun);
 
-        _fog = MainCamera.Profile!.Add<VolumetricFog>(overrideAll: true);
-        _fog.Enabled.Value = false;
-        _fog.GlobalDensity.Value = 0.02f;
-        _fog.MaxDistance.Value = 60f;
-        _bloom = MainCamera.Profile.Get<Bloom>()!;
+        SampleScene.Environment.VolumetricFog.Density = 0.02f;
+        SampleScene.Environment.VolumetricFog.Distance = 60f;
+        _bloom = MainCamera.Profile!.Get<Bloom>()!;
         _tonemapping = MainCamera.Profile.Get<Tonemapping>()!;
         SampleScene.Environment.Fog.Mode = FogMode.Off;
         SampleScene.Environment.Ambient.Mode = AmbientMode.Uniform;
 
         float length = StationSpacing * StationCount + 30f;
-        Add(Block("Floor", new Float3(length, 1f, 60f), Floor(length, 60f), new Float3(StationSpacing * (StationCount - 1) * 0.5f, -0.5f, 0f)));
+        Add(Block("Floor", new Float3(length, 20f, 60f), Floor(length, 60f), new Float3(StationSpacing * (StationCount - 1) * 0.5f, -10f, 0f)));
 
         BuildMaterials(StationCenter(0));
         BuildSurfaceMaps(StationCenter(1));
@@ -105,15 +103,16 @@ public sealed class RenderingShowcaseGame : StationGame
         BuildInstancing(StationCenter(8));
         BuildRenderTextures(StationCenter(9));
         BuildClouds(StationCenter(10));
+        BuildOcean(StationCenter(OceanStation));
     }
 
     protected override void OnStationChanged(int index)
     {
         _hours = StationHours[index];
         _animateSky = false;
-        _fog.Enabled.Value = index == FogStation;
+        SampleScene.Environment.VolumetricFog.Enabled = index == FogStation;
         SetTimeOfDay(_hours);
-        SetFlightSpeed(index == CloudStation ? _cloudFlightSpeed : 7f);
+        SetFlightSpeed(index is CloudStation or OceanStation ? _cloudFlightSpeed : 7f);
     }
 
     // Shift flies about three times faster, as the fly camera does by default
@@ -172,7 +171,7 @@ public sealed class RenderingShowcaseGame : StationGame
     }
 
     public override bool HasStationControls => CurrentStation is SurfaceStation or DecalStation or LightStation or AreaLightStation
-        or ManyLightStation or FogStation or InstancingStation or CloudStation;
+        or ManyLightStation or FogStation or InstancingStation or CloudStation or OceanStation;
 
     public override void DrawControls(Paper paper, FontFile font)
     {
@@ -186,6 +185,7 @@ public sealed class RenderingShowcaseGame : StationGame
             case FogStation: FogControls(paper, font); break;
             case InstancingStation: InstancingControls(paper, font); break;
             case CloudStation: CloudControls(paper, font); break;
+            case OceanStation: OceanControls(paper, font); break;
         }
     }
 
@@ -222,7 +222,7 @@ public sealed class RenderingShowcaseGame : StationGame
         Header(paper, font, "Post effects", 2);
         Toggle(paper, font, "Bloom", _bloom.Active, v => _bloom.Active = v);
         Slider(paper, font, "Bloom intensity", _bloom.Intensity, 0f, 2f, v => _bloom.Intensity.Value = v);
-        Toggle(paper, font, "Volumetric fog", _fog.Enabled, v => _fog.Enabled.Value = v);
+        Toggle(paper, font, "Volumetric fog", SampleScene.Environment.VolumetricFog.Enabled, v => SampleScene.Environment.VolumetricFog.Enabled = v);
         Cycle(paper, font, "Tonemapper", _tonemapping.Mode.Value, v => _tonemapping.Mode.Value = v);
     }
 
@@ -604,7 +604,7 @@ public sealed class RenderingShowcaseGame : StationGame
 
     private void BuildFog(Float3 c)
     {
-        AddStation("Fog", "Volumetric fog is a camera effect, switched on only at this station. Lights with a Fog Light component scatter in it, so the spot lights draw visible beams, and fog volumes thicken and tint it locally.", c, new Float3(0f, 4f, -13f), 2.5f);
+        AddStation("Fog", "Volumetric fog is part of the scene's environment, switched on only at this station. Every light scatters in it through its shadows, so the spot lights draw visible beams, and fog volumes thicken and tint it locally.", c, new Float3(0f, 4f, -13f), 2.5f);
 
         Color[] beams = [new(1f, 0.5f, 0.2f, 1f), new(0.3f, 0.6f, 1f, 1f), new(0.6f, 1f, 0.4f, 1f)];
         for (int i = 0; i < beams.Length; i++)
@@ -616,7 +616,6 @@ public sealed class RenderingShowcaseGame : StationGame
             spot.Intensity = 4700000f;
             spot.SpotAngle = 50f;
             spot.SpotSoftness = 1f - 15f / 25f;
-            go.AddComponent<FogLight>().IntensityMultiplier = 4f;
             go.Transform.Position = c + new Float3((i - 1) * 5f, 8f, 1f);
             Sweep sweep = go.AddComponent<Sweep>();
             sweep.Target = c + new Float3((i - 1) * 5f, 0f, 1f);
@@ -649,9 +648,9 @@ public sealed class RenderingShowcaseGame : StationGame
     private void FogControls(Paper paper, FontFile font)
     {
         Header(paper, font, "Volumetric fog");
-        Toggle(paper, font, "Enabled", _fog.Enabled, v => _fog.Enabled.Value = v);
-        Slider(paper, font, "Density", _fog.GlobalDensity, 0f, 0.1f, v => _fog.GlobalDensity.Value = v, "0.000");
-        Slider(paper, font, "Scattering", _fog.Scattering, 0f, 1f, v => _fog.Scattering.Value = v);
+        Toggle(paper, font, "Enabled", SampleScene.Environment.VolumetricFog.Enabled, v => SampleScene.Environment.VolumetricFog.Enabled = v);
+        Slider(paper, font, "Density", SampleScene.Environment.VolumetricFog.Density, 0f, 0.1f, v => SampleScene.Environment.VolumetricFog.Density = v, "0.000");
+        Slider(paper, font, "Anisotropy", SampleScene.Environment.VolumetricFog.Anisotropy, 0f, 0.95f, v => SampleScene.Environment.VolumetricFog.Anisotropy = v);
     }
 
     // ----------------------------------------------------------------
@@ -764,38 +763,152 @@ public sealed class RenderingShowcaseGame : StationGame
 
     private void BuildClouds(Float3 c)
     {
-        AddStation("Clouds", "Clouds cover the whole scene, so they are over every station. They are ray marched at a reduced resolution, shaped by a coverage map and noise, and lit from a sun map so each step reads its light once.", c, new Float3(0f, 2f, -6f), 8f);
+        AddStation("Clouds", "Clouds cover the whole scene, so they are over every station. They are ray marched through a coverage map shaped by a height profile and eroded by cell noise, lit by a short march toward the sun.", c, new Float3(0f, 2f, -6f), 4.2f);
 
-        var clouds = new GameObject("Clouds");
-        _clouds = clouds.AddComponent<VolumetricClouds>();
-        _clouds.Layers =
-        [
-            new CloudLayer { Style = CloudLayerStyle.Cirrus, Altitude = 9000f, Coverage = 0.5f, Opacity = 0.6f },
-            new CloudLayer { Enabled = false, Style = CloudLayerStyle.Stratus, Altitude = 5000f, Coverage = 0.45f, Opacity = 0.6f, WindMultiplier = 1.5f },
-        ];
-        Add(clouds);
+        _clouds = MainCamera.Profile!.Add<VolumetricClouds>(overrideAll: true);
+    }
+
+    // ----------------------------------------------------------------
+    //  -  Ocean
+    // ----------------------------------------------------------------
+
+    private void BuildOcean(Float3 c)
+    {
+        AddStation("Ocean", "FFT waves in four cascades on repeating tiles, drawn as rings of tiles that grow with the camera's height and curve down with the planet. The water absorbs what is behind it with depth and foams where the crests fold.", c + new Float3(0f, 0f, -40f), new Float3(0f, 4f, 12f), 0f);
+
+        var ocean = new GameObject("Ocean");
+        ocean.Transform.Position = new Float3(StationSpacing * (StationCount - 1) * 0.5f, -3f, 0f);
+
+        // A sand beach sloping from the floor's edge down past 100 m, where the longest waves start to feel the bottom,
+        // so they shrink gradually toward the shore and foam against it
+        const float Slope = 12f, Length = 520f, Thickness = 4f;
+        float angle = Slope * MathF.PI / 180f;
+        Float3 topEdge = new(0f, Thickness * 0.5f * MathF.Cos(angle) + Length * 0.5f * MathF.Sin(angle), -Thickness * 0.5f * MathF.Sin(angle) + Length * 0.5f * MathF.Cos(angle));
+        Add(Model("Beach", Mesh.CreateCube(new Float3(200f, Thickness, Length)), Lit(new Color(0.62f, 0.55f, 0.4f, 1f), 0f, 0.9f),
+            new Float3(c.X, 0f, -30f) - topEdge, new Float3(-Slope, 0f, 0f)));
+        _ocean = ocean.AddComponent<Ocean>();
+        _ocean.FloorCaptureSize = 1200f;
+        _ocean.FloorCaptureResolution = 2048;
+
+        // A walled pond on the platform, its water held a metre and a half above the floor
+        Float3 pond = c + new Float3(0f, 0f, 12f);
+        const float PondSize = 16f, WallHeight = 2f;
+        for (int side = 0; side < 4; side++)
+        {
+            bool alongX = side < 2;
+            float offset = (side % 2 == 0 ? -1f : 1f) * PondSize * 0.5f;
+            Float3 size = alongX ? new Float3(PondSize + 2f, WallHeight, 2f) : new Float3(2f, WallHeight, PondSize + 2f);
+            Float3 at = pond + (alongX ? new Float3(0f, WallHeight * 0.5f, offset) : new Float3(offset, WallHeight * 0.5f, 0f));
+            Add(Block("Pond Wall", size, _concrete, at));
+        }
+        var level = new GameObject("Pond Water");
+        level.Transform.Position = pond + new Float3(0f, 1.5f, 0f);
+        level.AddComponent<OceanWaterLevel>().Size = new Float2(PondSize, PondSize);
+        Add(level);
+
+        // The crates move, so they are kept out of the floor the ocean captures
+        const int FloatingLayer = 8;
+        _ocean.FloorLayers.RemoveLayer(FloatingLayer);
+
+        // Crates floating on probes at their bottom corners, rocked by the waves they sit on
+        for (int i = 0; i < 3; i++)
+        {
+            GameObject crate = Add(Model("Floating Crate", Mesh.CreateCube(new Float3(2f)), Lit(Hsv(0.08f + i * 0.3f, 0.6f, 0.6f), 0f, 0.7f), c + new Float3(-12f + i * 12f, 0f, -90f - i * 20f)));
+            crate.LayerIndex = FloatingLayer;
+            crate.AddComponent<Rigidbody3D>();
+            crate.AddComponent<BoxCollider>().Size = new Float3(2f);
+            OceanFloater floater = crate.AddComponent<OceanFloater>();
+            floater.Probes = [new Float3(-0.8f, -0.8f, -0.8f), new Float3(0.8f, -0.8f, -0.8f), new Float3(-0.8f, -0.8f, 0.8f), new Float3(0.8f, -0.8f, 0.8f)];
+            OceanWake wake = crate.AddComponent<OceanWake>();
+            wake.Radius = 1.2f;
+            wake.Weight = 4f;
+        }
+
+        // An open concrete box standing in the sea, kept dry inside by a clip box
+        Float3 dock = c + new Float3(-30f, -3f, -60f);
+        const float DockSize = 6f, DockHeight = 4f, DockWall = 0.3f;
+        var dockParts = new[]
+        {
+            Block("Dock Floor", new Float3(DockSize, DockWall, DockSize), _concrete, dock + new Float3(0f, -DockHeight * 0.5f, 0f)),
+            Block("Dock Wall", new Float3(DockSize, DockHeight, DockWall), _concrete, dock + new Float3(0f, 0f, DockSize * 0.5f)),
+            Block("Dock Wall", new Float3(DockSize, DockHeight, DockWall), _concrete, dock + new Float3(0f, 0f, -DockSize * 0.5f)),
+            Block("Dock Wall", new Float3(DockWall, DockHeight, DockSize), _concrete, dock + new Float3(DockSize * 0.5f, 0f, 0f)),
+            Block("Dock Wall", new Float3(DockWall, DockHeight, DockSize), _concrete, dock + new Float3(-DockSize * 0.5f, 0f, 0f)),
+        };
+        foreach (GameObject part in dockParts)
+        {
+            part.LayerIndex = FloatingLayer;
+            Add(part);
+        }
+        var dry = new GameObject("Dock Clip");
+        dry.Transform.Position = dock;
+        dry.AddComponent<OceanClip>().Size = new Float3(DockSize - DockWall, DockHeight, DockSize - DockWall);
+        Add(dry);
+
+        // A current running along x past the crates, carrying the waves, foam and their wakes downstream
+        var current = new GameObject("Ocean Current");
+        current.Transform.Position = c + new Float3(0f, 0f, -110f);
+        current.Transform.EulerAngles = new Float3(0f, 90f, 0f);
+        OceanFlow flow = current.AddComponent<OceanFlow>();
+        flow.Size = new Float2(80f, 80f);
+        flow.Speed = 2f;
+        flow.Feather = 25f;
+        Add(current);
+        Add(ocean);
+    }
+
+    private void OceanControls(Paper paper, FontFile font)
+    {
+        Header(paper, font, "Ocean");
+        Slider(paper, font, "Wind speed km/h", _ocean.WindSpeed, 1f, 150f, v => _ocean.WindSpeed = v, "0");
+        Slider(paper, font, "Wind direction", _ocean.WindDirection, 0f, 360f, v => _ocean.WindDirection = v, "0");
+        Slider(paper, font, "Turbulence", _ocean.Turbulence, 0f, 1f, v => _ocean.Turbulence = v);
+        Slider(paper, font, "Wave scale", _ocean.WaveScale, 0f, 4f, v => _ocean.WaveScale = v);
+        Slider(paper, font, "Chop", _ocean.Chop, 0f, 2f, v => _ocean.Chop = v);
+        Slider(paper, font, "Time scale", _ocean.TimeScale, 0f, 4f, v => _ocean.TimeScale = v);
+        Slider(paper, font, "Roughness", _ocean.Roughness, 0f, 0.3f, v => _ocean.Roughness = v, "0.000");
+        Slider(paper, font, "Refraction", _ocean.Refraction, 0f, 1f, v => _ocean.Refraction = v);
+        Slider(paper, font, "Foam coverage", _ocean.FoamCoverage, 0f, 1.5f, v => _ocean.FoamCoverage = v);
+        Slider(paper, font, "Caustics strength", _ocean.CausticsStrength, 0f, 10f, v => _ocean.CausticsStrength = v);
+        Slider(paper, font, "Caustics distortion", _ocean.CausticsDistortion, 0f, 0.25f, v => _ocean.CausticsDistortion = v, "0.000");
+        Slider(paper, font, "Distortion scale m", _ocean.CausticsDistortionScale, 1f, 100f, v => _ocean.CausticsDistortionScale = v, "0");
+        Slider(paper, font, "Shore foam depth", _ocean.ShorelineFoamDepth, 0f, 2f, v => _ocean.ShorelineFoamDepth = v);
+        Slider(paper, font, "Shallow attenuation", _ocean.ShallowAttenuation, 0f, 1f, v => _ocean.ShallowAttenuation = v);
+        Slider(paper, font, "Flight speed", _cloudFlightSpeed, 7f, 3000f, v => { _cloudFlightSpeed = v; SetFlightSpeed(v); }, "0");
     }
 
     private void CloudControls(Paper paper, FontFile font)
     {
         Header(paper, font, "Clouds");
         Slider(paper, font, "Flight speed", _cloudFlightSpeed, 7f, 3000f, v => { _cloudFlightSpeed = v; SetFlightSpeed(v); }, "0");
-        Slider(paper, font, "Coverage", _clouds.Coverage, 0f, 1f, v => _clouds.Coverage = v);
-        Slider(paper, font, "Density", _clouds.Density, 0f, 4f, v => _clouds.Density = v);
-        Slider(paper, font, "Erosion", _clouds.Erosion, 0f, 1f, v => _clouds.Erosion = v);
-        Slider(paper, font, "Puff strength", _clouds.PuffStrength, 0f, 1f, v => _clouds.PuffStrength = v);
-        Slider(paper, font, "Puff scale", _clouds.PuffScale, 0.5f, 10f, v => _clouds.PuffScale = v, "0.0");
-        Toggle(paper, font, "Temporal upscale", _clouds.TemporalUpscale, v => _clouds.TemporalUpscale = v);
-        Slider(paper, font, "Reach", _clouds.Reach, 8000f, 128000f, v => _clouds.Reach = v, "0");
-        Toggle(paper, font, "March toward the sun", _clouds.MarchToSun, v => _clouds.MarchToSun = v);
-        if (_clouds.MarchToSun)
-            Slider(paper, font, "Light samples", _clouds.LightSamples, 1f, 8f, v => _clouds.LightSamples = (int)MathF.Round(v), "0");
-        Slider(paper, font, "Altitude", _clouds.Altitude, 200f, 4000f, v => _clouds.Altitude = v, "0");
-        Slider(paper, font, "Thickness", _clouds.Thickness, 100f, 3000f, v => _clouds.Thickness = v, "0");
-        Slider(paper, font, "Wind speed", _clouds.WindSpeed, 0f, 200f, v => _clouds.WindSpeed = v, "0");
-        Cycle(paper, font, "Resolution", _clouds.Resolution, v => _clouds.Resolution = v);
-        Toggle(paper, font, "Cirrus layer", _clouds.Layers[0].Enabled, v => _clouds.Layers[0].Enabled = v);
-        Toggle(paper, font, "Stratus layer", _clouds.Layers[1].Enabled, v => _clouds.Layers[1].Enabled = v);
+        Slider(paper, font, "Coverage", _clouds.Coverage, 0f, 1f, v => _clouds.Coverage.Value = v);
+        Slider(paper, font, "Density", _clouds.Density, 0f, 4f, v => _clouds.Density.Value = v);
+        Slider(paper, font, "Erosion", _clouds.Erosion, 0f, 1f, v => _clouds.Erosion.Value = v);
+        Slider(paper, font, "Wisps", _clouds.Wisps, 0f, 1f, v => _clouds.Wisps.Value = v);
+        Slider(paper, font, "Wisp scale", _clouds.WispScale, 10f, 600f, v => _clouds.WispScale.Value = v, "0");
+        Slider(paper, font, "Bottom strength", _clouds.BottomStrength, 0f, 1f, v => _clouds.BottomStrength.Value = v);
+        Slider(paper, font, "Top strength", _clouds.TopStrength, 0f, 1f, v => _clouds.TopStrength.Value = v);
+        Slider(paper, font, "Dome strength", _clouds.DomeStrength, 0f, 2f, v => _clouds.DomeStrength.Value = v);
+        Slider(paper, font, "Gap multiplier", _clouds.GapMultiplier, 0f, 3f, v => _clouds.GapMultiplier.Value = v);
+        Slider(paper, font, "Lobes", _clouds.Lobes, 0f, 1f, v => _clouds.Lobes.Value = v);
+        Slider(paper, font, "Lobe scale", _clouds.LobeScale, 200f, 8000f, v => _clouds.LobeScale.Value = v, "0");
+        Slider(paper, font, "Bottom coverage", _clouds.BottomCoverage, 0f, 2f, v => _clouds.BottomCoverage.Value = v);
+        Slider(paper, font, "Top coverage", _clouds.TopCoverage, 0f, 2f, v => _clouds.TopCoverage.Value = v);
+        Slider(paper, font, "Change speed", _clouds.FormationChangeSpeed, 0f, 0.05f, v => _clouds.FormationChangeSpeed.Value = v, "0.000");
+        Slider(paper, font, "Sun brightness", _clouds.SunBrightness, 0f, 6f, v => _clouds.SunBrightness.Value = v);
+        Slider(paper, font, "Ambient brightness", _clouds.AmbientBrightness, 0f, 4f, v => _clouds.AmbientBrightness.Value = v);
+        Slider(paper, font, "Ambient saturation", _clouds.AmbientSaturation, 0f, 1f, v => _clouds.AmbientSaturation.Value = v);
+        Slider(paper, font, "Multiple scattering", _clouds.MultipleScattering, 0f, 1f, v => _clouds.MultipleScattering.Value = v);
+        Slider(paper, font, "Scattering occlusion", _clouds.MultipleScatteringOcclusion, 0f, 1f, v => _clouds.MultipleScatteringOcclusion.Value = v);
+        Toggle(paper, font, "Temporal", _clouds.Temporal, v => _clouds.Temporal.Value = v);
+        Slider(paper, font, "Shadow resolution", _clouds.ShadowResolution, 128f, 2048f, v => _clouds.ShadowResolution.Value = (int)v, "0");
+        Slider(paper, font, "Horizon fade", _clouds.HorizonFade, 5000f, 100000f, v => _clouds.HorizonFade.Value = v, "0");
+        Slider(paper, font, "Altitude", _clouds.Altitude, 200f, 4000f, v => _clouds.Altitude.Value = v, "0");
+        Slider(paper, font, "Thickness", _clouds.Thickness, 100f, 4000f, v => _clouds.Thickness.Value = v, "0");
+        Slider(paper, font, "Wind speed", _clouds.WindSpeed, 0f, 200f, v => _clouds.WindSpeed.Value = v, "0");
+        Cycle(paper, font, "Resolution", _clouds.Resolution.Value, v => _clouds.Resolution.Value = v);
+        Toggle(paper, font, "High layer", _clouds.HighLayer, v => _clouds.HighLayer.Value = v);
+        Slider(paper, font, "High layer opacity", _clouds.HighLayerOpacity, 0f, 1f, v => _clouds.HighLayerOpacity.Value = v);
     }
 }
 

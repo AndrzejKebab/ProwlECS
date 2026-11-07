@@ -135,10 +135,11 @@ public sealed class SceneRendering : IDisposable
         if (Unpark(member)) _members.Add(member);
     }
 
-    /// <summary>Parks a member as a sync that found it settled does.</summary>
+    /// <summary>Parks a member as a sync that found it settled does, moving <see cref="Epoch"/> as the end of a sync does.</summary>
     internal void Settle(IRenderSync member)
     {
         if (_members.Remove(member)) Park(member);
+        Epoch++;
     }
 
     private void Park(IRenderSync member)
@@ -264,10 +265,26 @@ public sealed class SceneRendering : IDisposable
         });
     }
 
+    private readonly List<FogVolumeDesc> _fogVolumes = [];
+
+    // The scene's enabled fog volumes, their density a multiple of the volumetric fog's
+    private FogVolumeDesc[] FogVolumes(float density)
+    {
+        _fogVolumes.Clear();
+        foreach (GameObject go in _scene.ActiveObjects)
+        {
+            FogVolume? volume = go.GetComponent<FogVolume>();
+            if (volume.IsValid() && volume.EnabledInHierarchy && _fogVolumes.Count < EnvironmentDesc.MaxFogVolumes)
+                _fogVolumes.Add(volume.Describe(density));
+        }
+        return [.. _fogVolumes];
+    }
+
     private void SyncEnvironment(RenderWorld world)
     {
         EnvironmentDesc env = world.Environment;
         _scene.Environment.ApplyTo(env);
+        env.FogVolumes = FogVolumes(_scene.Environment.VolumetricFog.Density);
 
         DirectionalLight? sun = null;
         foreach (DirectionalLight light in _directionals)
